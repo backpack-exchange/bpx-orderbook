@@ -16,7 +16,7 @@ use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::protocol::Message;
 
 const API_BASE: &str = "https://api.backpack.exchange/api/v1";
-const WSS_URL: &str = "wss://ws.backpack.exchange/stream";
+const WSS_URL: &str = "wss://ws.backpack.exchange";
 const SYMBOL: &str = "SOL_USDC";
 
 type Price = Decimal;
@@ -75,7 +75,7 @@ async fn main() {
     // Subscribe to the depth stream.
     let subscribe_message = serde_json::json!({
         "method": "SUBSCRIBE",
-        "params": [format!("{SYMBOL}@depth")]
+        "params": [format!("depth.{SYMBOL}")]
     })
     .to_string();
 
@@ -97,7 +97,7 @@ async fn main() {
         events.lock().await.push(message.data);
     });
 
-    let _ = tokio::spawn({
+    tokio::spawn({
         let order_book = order_book.clone();
         let events = events.clone();
 
@@ -144,17 +144,10 @@ async fn main() {
                         .lock()
                         .await
                         .retain(|event| event.last_update_id > snapshot_last_update_id);
+
                     *order_book.lock().await = OrderBook {
-                        asks: snapshot
-                            .asks
-                            .into_iter()
-                            .map(|(price, quantity)| (price, quantity))
-                            .collect(),
-                        bids: snapshot
-                            .bids
-                            .into_iter()
-                            .map(|(price, quantity)| (price, quantity))
-                            .collect(),
+                        asks: snapshot.asks.into_iter().collect(),
+                        bids: snapshot.bids.into_iter().collect(),
                         last_update_id: snapshot_last_update_id,
                     };
                     break;
@@ -165,6 +158,16 @@ async fn main() {
             loop {
                 for event in events.lock().await.drain(..) {
                     let mut order_book = order_book.lock().await;
+
+                    let time = chrono::Utc::now().timestamp_millis();
+
+                    let time_diff = time - event.event_time;
+
+                    if time_diff > 1000 {
+                        println!("Time difference is too large: {}ms", time_diff);
+                    } else {
+                        println!("Time difference is: {}ms", time_diff);
+                    }
 
                     if order_book.last_update_id != event.first_update_id - 1 {
                         panic!("Dropped messages");
@@ -192,13 +195,16 @@ async fn main() {
                     let _ = execute!(stdout(), Clear(ClearType::All));
                     execute!(stdout(), SetForegroundColor(Color::Red)).unwrap();
                     execute!(stdout(), Print("Asks\n")).unwrap();
-                    for (price, quantity) in order_book.asks.iter().rev() {
+
+                    for (price, quantity) in order_book.asks.iter().take(10) {
                         execute!(stdout(), Print(format!("{} {}\n", price, quantity))).unwrap();
                     }
+
                     execute!(stdout(), Print("\n")).unwrap();
                     execute!(stdout(), SetForegroundColor(Color::Green)).unwrap();
                     execute!(stdout(), Print("Bids\n")).unwrap();
-                    for (price, quantity) in order_book.bids.iter().rev() {
+
+                    for (price, quantity) in order_book.bids.iter().rev().take(10) {
                         execute!(stdout(), Print(format!("{} {}\n", price, quantity))).unwrap();
                     }
                 }
